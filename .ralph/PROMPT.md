@@ -64,7 +64,7 @@ VeepaAudioTest/
 
 ### 3. SUB-STORY IMPLEMENTATION
 
-For each sub-story:
+For each sub-story, follow steps A through E in exact order:
 
 #### A. READ CAREFULLY
 ```bash
@@ -99,6 +99,8 @@ grep "pattern" file
 
 **Expected output is documented** - compare your results to documentation.
 
+**If verification fails**: Debug and fix before proceeding. Do not mark acceptance criteria complete.
+
 #### D. CHECK ACCEPTANCE CRITERIA
 Before moving to next sub-story, ALL checkboxes must be complete:
 ```markdown
@@ -109,6 +111,26 @@ Before moving to next sub-story, ALL checkboxes must be complete:
 ```
 
 Mark them complete with [x].
+
+#### E. UPDATE PROGRESS TRACKER
+After ALL acceptance criteria met and commit created:
+
+1. **Read** @fix_plan.md
+2. **Edit** @fix_plan.md using Edit tool:
+   - Find the line: `- [ ] X.Y - <Sub-story title>`
+   - Change to: `- [x] X.Y - <Sub-story title>`
+3. **Verify** the change was made correctly
+
+**Example**:
+```bash
+# Before
+- [ ] 1.1 - Flutter Module Structure
+
+# After (use Edit tool)
+- [x] 1.1 - Flutter Module Structure
+```
+
+**CRITICAL**: Use Edit tool, not Write. Only change the specific line.
 
 ### 4. COMMIT WORKFLOW
 
@@ -388,16 +410,21 @@ RECOMMENDATION: 🎉 ALL 27 SUB-STORIES COMPLETE! VeepaAudioTest fully implement
 
 **Update @fix_plan.md** after each sub-story: `- [x] X.Y - Title`
 
-## Current Task
+## Current Task - Complete Workflow
 
-1. Check if `@fix_plan.md` exists
-2. If not, create it with template above
-3. Find first incomplete sub-story (unchecked `- [ ]`)
-4. Read that sub-story's markdown file
-5. Implement following the steps exactly
-6. Verify, check acceptance criteria, commit
-7. Update `@fix_plan.md` to mark complete: `- [x]`
-8. Report status and proceed to next sub-story
+**For EACH sub-story (repeat 27 times):**
+
+1. **Read** @fix_plan.md - find first `- [ ]` (incomplete sub-story)
+2. **Read** that sub-story's markdown file from docs/stories/
+3. **Implement** steps A-B: Follow implementation steps exactly
+4. **Verify** step C: Run all verification commands
+5. **Check** step D: Ensure all acceptance criteria met
+6. **Commit** to git with proper format (see section 4)
+7. **Update** step E: Edit @fix_plan.md to mark `- [x]`
+8. **Report** status with RALPH_STATUS block
+9. **Loop** back to step 1 for next sub-story
+
+**Exit when**: @fix_plan.md shows 27/27 `[x]` complete
 
 **Remember**:
 - Quality over speed

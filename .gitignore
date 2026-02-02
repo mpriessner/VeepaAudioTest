@@ -1,0 +1,77 @@
+# VeepaAudioTest - Git Ignore
+
+# RALPH Runtime Files (don't commit these)
+.ralph/.call_count
+.ralph/.last_reset
+.ralph/.status.json
+.ralph/.progress.json
+.ralph/.claude_session_id
+.ralph/.ralph_session
+.ralph/.ralph_session_history
+.ralph/.exit_signals
+.ralph/.circuit_breaker_state
+.ralph/.response_analysis
+.ralph/logs/
+
+# Xcode
+*.xcodeproj
+*.xcworkspace
+.DS_Store
+*.swp
+*.swo
+*~.nib
+DerivedData/
+build/
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+xcuserdata/
+*.moved-aside
+*.xccheckout
+*.xcscmblueprint
+*.hmap
+*.ipa
+
+# Flutter/Dart/Pub related
+**/flutter_module/**/ios/.symlinks/
+**/flutter_module/**/.dart_tool/
+**/flutter_module/**/.packages
+**/flutter_module/**/.flutter-plugins
+**/flutter_module/**/.flutter-plugins-dependencies
+**/flutter_module/**/pubspec.lock
+**/flutter_module/**/build/
+**/flutter_module/**/.ios/
+**/flutter_module/**/.android/
+
+# iOS Flutter Frameworks (generated, too large for git)
+**/ios/**/Flutter/
+**/ios/**/FlutterFrameworks/
+**/ios/**/.symlinks/
+
+# Pods (if using CocoaPods)
+**/ios/**/Pods/
+**/ios/**/Podfile.lock
+
+# Build artifacts
+*.o
+*.a
+*.framework
+*.app
+*.dSYM.zip
+*.dSYM
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Misc
+*.log
+.env
+.env.local
+credentials.json

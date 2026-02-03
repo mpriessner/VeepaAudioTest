@@ -1,0 +1,113 @@
+#
+# ADAPTED FROM: SciSymbioLens/ios/SciSymbioLens/project.yml
+# Changes: Removed Supabase, GoogleGenerativeAI, simplified for audio testing
+#
+
+name: VeepaAudioTest
+options:
+  bundleIdPrefix: com.veepatest
+  deploymentTarget:
+    iOS: "17.0"
+  xcodeVersion: "15.0"
+  developmentLanguage: en
+
+# ADAPTED: No external Swift packages needed
+# (SciSymbioLens had Supabase and GoogleGenerativeAI)
+packages: {}
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    TARGETED_DEVICE_FAMILY: "1"  # iPhone only
+    INFOPLIST_FILE: VeepaAudioTest/Resources/Info.plist
+    GENERATE_INFOPLIST_FILE: NO
+    ENABLE_PREVIEWS: YES
+    ENABLE_USER_SCRIPT_SANDBOXING: NO  # Required for build scripts
+
+targets:
+  VeepaAudioTest:
+    type: application
+    platform: iOS
+
+    # ADAPTED: Pre-build script to sync Flutter frameworks
+    # This is CRITICAL - must run before Xcode tries to link frameworks
+    preBuildScripts:
+      - name: Sync Flutter Frameworks
+        script: |
+          "${SRCROOT}/Scripts/sync-flutter-frameworks.sh"
+        basedOnDependencyAnalysis: false
+
+    sources:
+      - path: VeepaAudioTest
+        excludes:
+          - "**/.DS_Store"
+
+      # ADAPTED: Include Veepa SDK plugin files
+      # (SciSymbioLens has this in VeepaSDK/ folder)
+      - path: VeepaSDK/VsdkPlugin.h
+      - path: VeepaSDK/VsdkPlugin.m
+      - path: VeepaSDK/AppP2PApiPlugin.h
+      - path: VeepaSDK/AppPlayerPlugin.h
+
+    dependencies:
+      # ADAPTED: Flutter frameworks (Debug build - will add Release later)
+      # These paths are synced by the pre-build script
+      - framework: Flutter/Debug/Flutter.xcframework
+        embed: true
+      - framework: Flutter/Debug/App.xcframework
+        embed: true
+      - framework: Flutter/Debug/FlutterPluginRegistrant.xcframework
+        embed: true
+
+      # ADAPTED: P2P SDK static library (will be added in Story 2)
+      # - framework: VeepaSDK/libVSTC.a
+      #   embed: false
+
+      # ADAPTED: System libraries required by P2P SDK
+      - sdk: libz.tbd
+      - sdk: libc++.tbd
+      - sdk: libiconv.tbd
+      - sdk: libbz2.tbd
+
+      # ADAPTED: System frameworks required for audio streaming
+      - sdk: AVFoundation.framework
+      - sdk: AudioToolbox.framework
+      - sdk: CoreMedia.framework
+      - sdk: CoreVideo.framework
+      # VideoToolbox will be needed when we add video in future (not needed for audio-only)
+
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.veepatest.audio
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: ""
+        DEVELOPMENT_TEAM: ""
+        ENABLE_PREVIEWS: YES
+        CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES: YES
+
+        # ADAPTED: Bridging header for Swift <-> ObjC interop
+        SWIFT_OBJC_BRIDGING_HEADER: VeepaAudioTest/App/VeepaAudioTest-Bridging-Header.h
+
+        # ADAPTED: Search paths for VeepaSDK headers and Flutter
+        HEADER_SEARCH_PATHS: "$(inherited) $(SRCROOT)/VeepaSDK $(SRCROOT)/Flutter"
+        LIBRARY_SEARCH_PATHS: "$(inherited) $(SRCROOT)/VeepaSDK"
+
+        # ADAPTED: Disable bitcode (required for libVSTC.a)
+        ENABLE_BITCODE: NO
+
+schemes:
+  VeepaAudioTest:
+    build:
+      targets:
+        VeepaAudioTest: all
+    run:
+      config: Debug
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release

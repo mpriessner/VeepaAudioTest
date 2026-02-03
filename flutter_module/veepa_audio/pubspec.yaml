@@ -1,0 +1,25 @@
+name: veepa_audio
+description: Minimal Flutter module for Veepa camera audio testing
+publish_to: 'none'
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # ADAPTED: Only ffi dependency for P2P SDK bindings
+  ffi: ^2.0.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^2.0.0
+
+# ADAPTED: flutter block for plugin configuration
+flutter:
+  module:
+    androidX: true
+    androidPackage: com.veepatest.audio
+    iosBundleIdentifier: com.veepatest.audio

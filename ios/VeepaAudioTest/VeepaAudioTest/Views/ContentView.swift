@@ -21,9 +21,10 @@ struct ContentView: View {
 
     // Pre-filled test credentials for convenience
     // Camera: OKB0379853SNLJ (test camera from SciSymbioLens)
-    // WiFi: 6wKe727e (if needed for provisioning)
+    // Password: 888888 (default camera password)
+    // Note: Credentials are now fetched automatically from cloud!
     @State private var uid = "OKB0379853SNLJ"
-    @State private var serviceParam = "888888"
+    @State private var password = "888888"
     @State private var showingError = false
     @State private var errorMessage = ""
     @State private var selectedStrategyIndex = 0
@@ -80,23 +81,26 @@ struct ContentView: View {
             }
 
             // UID Input
-            TextField("Camera UID (e.g., ABCD-123456-ABCDE)", text: $uid)
+            TextField("Camera UID (e.g., OKB0379853SNLJ)", text: $uid)
                 .textFieldStyle(.roundedBorder)
                 .autocapitalization(.allCharacters)
                 .disabled(isConnected)
                 .onChange(of: uid) { _, newValue in
-                    // Validate UID format (15 characters with dashes)
-                    if newValue.count > 18 {
-                        uid = String(newValue.prefix(18))
+                    // Validate UID format
+                    if newValue.count > 20 {
+                        uid = String(newValue.prefix(20))
                     }
                 }
 
-            // Service Param Input
-            TextField("Service Param (from authentication API)", text: $serviceParam)
+            // Password Input
+            SecureField("Camera Password", text: $password)
                 .textFieldStyle(.roundedBorder)
-                .autocapitalization(.none)
-                .autocorrectionDisabled(true)
                 .disabled(isConnected)
+
+            Text("💡 Tip: Credentials are fetched automatically from cloud!")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .padding(.top, 4)
 
             // Connect/Disconnect Button
             Button(action: toggleConnection) {
@@ -114,7 +118,7 @@ struct ContentView: View {
                 .foregroundColor(.white)
                 .cornerRadius(8)
             }
-            .disabled(isConnecting || (!isConnected && (uid.isEmpty || serviceParam.isEmpty)))
+            .disabled(isConnecting || (!isConnected && uid.isEmpty))
         }
         .padding()
     }
@@ -307,8 +311,8 @@ struct ContentView: View {
                 // Disconnect
                 await connectionService.disconnect()
             } else {
-                // Connect
-                await connectionService.connect(uid: uid, serviceParam: serviceParam)
+                // Connect with automatic credential fetching (Quick Test Mode)
+                await connectionService.connect(uid: uid, password: password)
 
                 // Check for connection errors
                 if case .error(let message) = connectionService.connectionState {

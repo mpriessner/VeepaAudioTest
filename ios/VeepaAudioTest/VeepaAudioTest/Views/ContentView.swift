@@ -2,7 +2,14 @@
 // Changes: Three-section layout (Connection, Audio, Debug Log)
 //   - Removed video preview section
 //   - Removed discovery features
-//   - Placeholder actions for sub-stories 3.4 and 3.5
+//   - Pre-filled test credentials for convenience
+//
+// TEST CAMERA CREDENTIALS (hard-coded):
+// - UID: OKB0379853SNLJ
+// - Password: 888888
+// - WiFi Password (if needed): 6wKe727e
+//
+// Note: Verify the UID matches your physical camera label
 //
 import SwiftUI
 
@@ -12,8 +19,11 @@ struct ContentView: View {
     @StateObject private var connectionService = AudioConnectionService()
     @StateObject private var audioService = AudioStreamService()
 
-    @State private var uid = ""
-    @State private var serviceParam = ""
+    // Pre-filled test credentials for convenience
+    // Camera: OKB0379853SNLJ (test camera from SciSymbioLens)
+    // WiFi: 6wKe727e (if needed for provisioning)
+    @State private var uid = "OKB0379853SNLJ"
+    @State private var serviceParam = "888888"
     @State private var showingError = false
     @State private var errorMessage = ""
     @State private var selectedStrategyIndex = 0

@@ -56,8 +56,7 @@ targets:
         embed: true
       - framework: Flutter/Debug/App.xcframework
         embed: true
-      - framework: Flutter/Debug/FlutterPluginRegistrant.xcframework
-        embed: true
+      # Note: FlutterPluginRegistrant.xcframework not needed for module builds
 
       # ADAPTED: P2P SDK static library (will be added in Story 2)
       # - framework: VeepaSDK/libVSTC.a

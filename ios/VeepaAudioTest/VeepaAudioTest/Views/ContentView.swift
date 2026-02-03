@@ -20,10 +20,10 @@ struct ContentView: View {
     @StateObject private var audioService = AudioStreamService()
 
     // Pre-filled test credentials for convenience
-    // Camera: OKB0379853SNLJ (test camera from SciSymbioLens)
+    // Camera: OKB0379832YFIY (current test camera)
     // Password: 888888 (default camera password)
     // Note: Credentials are now fetched automatically from cloud!
-    @State private var uid = "OKB0379853SNLJ"
+    @State private var uid = "OKB0379832YFIY"
     @State private var password = "888888"
     @State private var showingError = false
     @State private var errorMessage = ""

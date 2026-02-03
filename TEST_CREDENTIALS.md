@@ -6,10 +6,16 @@
 
 These are hard-coded into the app for convenience during testing.
 
-### Test Camera (from SciSymbioLens)
-- **UID**: `OKB0379853SNLJ`
+### Current Test Camera
+- **UID**: `OKB0379832YFIY`
+- **Device Type**: `BMW1`
+- **WiFi Band**: `2.4GHz`
 - **Password**: `888888`
-- **Status**: Known working test camera
+- **Status**: Active test camera
+
+### Previous Test Camera
+- **UID**: `OKB0379853SNLJ`
+- **Status**: Inactive (switched to OKB0379832YFIY)
 
 ### Camera Admin (if needed)
 - **Default admin password**: `admin`
@@ -45,8 +51,8 @@ These are hard-coded into the app for convenience during testing.
 
 ### Physical Camera Verification
 1. Check the label on your physical camera
-2. Verify the UID matches `OKB0379853SNLJ`
-3. If different, update `ContentView.swift` line 18:
+2. Current camera UID: `OKB0379832YFIY`
+3. If you switch cameras, update `ContentView.swift` line 26:
    ```swift
    @State private var uid = "YOUR_CAMERA_UID_HERE"
    ```

@@ -44,12 +44,11 @@ targets:
 
       # ADAPTED: Include Veepa SDK plugin files
       # (SciSymbioLens has this in VeepaSDK/ folder)
+      # Note: AppP2PApiPlugin and AppPlayerPlugin implementations are in libVSTC.a
       - path: VeepaSDK/VsdkPlugin.h
       - path: VeepaSDK/VsdkPlugin.m
       - path: VeepaSDK/AppP2PApiPlugin.h
-      - path: VeepaSDK/AppP2PApiPlugin.m
       - path: VeepaSDK/AppPlayerPlugin.h
-      - path: VeepaSDK/AppPlayerPlugin.m
 
     dependencies:
       # ADAPTED: Flutter frameworks (Debug build - will add Release later)
@@ -60,9 +59,10 @@ targets:
         embed: true
       # Note: FlutterPluginRegistrant.xcframework not needed for module builds
 
-      # ADAPTED: P2P SDK static library (will be added in Story 2)
-      # - framework: VeepaSDK/libVSTC.a
-      #   embed: false
+      # ADAPTED: P2P SDK static library
+      # Contains implementations for AppP2PApiPlugin and AppPlayerPlugin
+      - framework: VeepaSDK/libVSTC.a
+        embed: false
 
       # ADAPTED: System libraries required by P2P SDK
       - sdk: libz.tbd
@@ -84,6 +84,7 @@ targets:
         CURRENT_PROJECT_VERSION: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: BMKRZ84RTN
         ENABLE_PREVIEWS: YES
         CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES: YES
 

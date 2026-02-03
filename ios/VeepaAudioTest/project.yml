@@ -47,7 +47,9 @@ targets:
       - path: VeepaSDK/VsdkPlugin.h
       - path: VeepaSDK/VsdkPlugin.m
       - path: VeepaSDK/AppP2PApiPlugin.h
+      - path: VeepaSDK/AppP2PApiPlugin.m
       - path: VeepaSDK/AppPlayerPlugin.h
+      - path: VeepaSDK/AppPlayerPlugin.m
 
     dependencies:
       # ADAPTED: Flutter frameworks (Debug build - will add Release later)

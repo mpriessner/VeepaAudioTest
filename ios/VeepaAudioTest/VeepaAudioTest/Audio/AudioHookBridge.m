@@ -1634,4 +1634,326 @@ static void swizzled_startVoice(id self, SEL _cmd) {
     NSLog(@"[AudioHookBridge] ═══════════════════════════════════════");
 }
 
+#pragma mark - Story 10.3: P2P Channel Audio Interception
+
+/// CSession function pointer types
+typedef void* (*CSession_ChannelBuffer_Get_fn)(void *session, int channel);
+typedef int (*CSession_Data_Read_fn)(void *session, int channel, void *buffer, int size);
+typedef void* (*CSession_SessionInfo_Get_fn)(void *client);
+
+/// Resolved function pointers
+static CSession_ChannelBuffer_Get_fn g_CSession_ChannelBuffer_Get = NULL;
+static CSession_Data_Read_fn g_CSession_Data_Read = NULL;
+static CSession_SessionInfo_Get_fn g_CSession_SessionInfo_Get = NULL;
+
+/// P2P audio capture state
+static dispatch_source_t g_p2pAudioTimer = NULL;
+static void *g_p2pClientPtr = NULL;
+static uint8_t *g_allocatedVoiceBuffer = NULL;
+static size_t g_allocatedVoiceBufferSize = 0;
+
+/// Resolve CSession symbols for direct P2P channel access
+- (BOOL)resolveCSessionSymbols {
+    NSLog(@"[AudioHookBridge] ═══════════════════════════════════════");
+    NSLog(@"[AudioHookBridge] 🔍 Story 10.3: Resolving CSession Symbols");
+    NSLog(@"[AudioHookBridge] ═══════════════════════════════════════");
+
+    // Try to resolve CSession functions
+    g_CSession_ChannelBuffer_Get = (CSession_ChannelBuffer_Get_fn)dlsym(RTLD_DEFAULT, "CSession_ChannelBuffer_Get");
+    g_CSession_Data_Read = (CSession_Data_Read_fn)dlsym(RTLD_DEFAULT, "CSession_Data_Read");
+    g_CSession_SessionInfo_Get = (CSession_SessionInfo_Get_fn)dlsym(RTLD_DEFAULT, "CSession_SessionInfo_Get");
+
+    NSLog(@"[CSESSION] CSession_ChannelBuffer_Get: %p %s",
+          g_CSession_ChannelBuffer_Get, g_CSession_ChannelBuffer_Get ? "✅" : "❌");
+    NSLog(@"[CSESSION] CSession_Data_Read: %p %s",
+          g_CSession_Data_Read, g_CSession_Data_Read ? "✅" : "❌");
+    NSLog(@"[CSESSION] CSession_SessionInfo_Get: %p %s",
+          g_CSession_SessionInfo_Get, g_CSession_SessionInfo_Get ? "✅" : "❌");
+
+    // Also try with underscore prefix
+    if (!g_CSession_ChannelBuffer_Get) {
+        g_CSession_ChannelBuffer_Get = (CSession_ChannelBuffer_Get_fn)dlsym(RTLD_DEFAULT, "_CSession_ChannelBuffer_Get");
+        if (g_CSession_ChannelBuffer_Get) NSLog(@"[CSESSION] Found _CSession_ChannelBuffer_Get: %p ✅", g_CSession_ChannelBuffer_Get);
+    }
+    if (!g_CSession_Data_Read) {
+        g_CSession_Data_Read = (CSession_Data_Read_fn)dlsym(RTLD_DEFAULT, "_CSession_Data_Read");
+        if (g_CSession_Data_Read) NSLog(@"[CSESSION] Found _CSession_Data_Read: %p ✅", g_CSession_Data_Read);
+    }
+    if (!g_CSession_SessionInfo_Get) {
+        g_CSession_SessionInfo_Get = (CSession_SessionInfo_Get_fn)dlsym(RTLD_DEFAULT, "_CSession_SessionInfo_Get");
+        if (g_CSession_SessionInfo_Get) NSLog(@"[CSESSION] Found _CSession_SessionInfo_Get: %p ✅", g_CSession_SessionInfo_Get);
+    }
+
+    BOOL success = (g_CSession_ChannelBuffer_Get != NULL || g_CSession_Data_Read != NULL);
+    NSLog(@"[CSESSION] Resolution result: %s", success ? "SUCCESS ✅" : "PARTIAL/FAILED");
+    NSLog(@"[AudioHookBridge] ═══════════════════════════════════════");
+
+    return success;
+}
+
+/// Manually allocate the voice_out_buff buffer
+- (BOOL)allocateVoiceBuffer {
+    NSLog(@"[AudioHookBridge] ═══════════════════════════════════════");
+    NSLog(@"[AudioHookBridge] 🔧 Story 10.3: Allocating Voice Buffer");
+    NSLog(@"[AudioHookBridge] ═══════════════════════════════════════");
+
+    if (capturedPlayerInstance == nil) {
+        NSLog(@"[ALLOC] ❌ No player instance captured - call startVoice first");
+        return NO;
+    }
+
+    Class playerClass = object_getClass(capturedPlayerInstance);
+    void *playerPtr = (__bridge void *)capturedPlayerInstance;
+
+    // Get voice_out_buff ivar
+    Ivar buffIvar = class_getInstanceVariable(playerClass, "voice_out_buff");
+    if (!buffIvar) {
+        NSLog(@"[ALLOC] ❌ voice_out_buff ivar not found");
+        return NO;
+    }
+
+    ptrdiff_t offset = ivar_getOffset(buffIvar);
+    NSLog(@"[ALLOC] voice_out_buff offset: %td", offset);
+
+    // The buffer structure is: {*buff, size, r, w}
+    // We need to read/write the first two fields (buff pointer and size)
+
+    // Read current state
+    uint8_t *structBase = (uint8_t *)playerPtr + offset;
+    void **buffPtrField = (void **)structBase;
+    uint64_t *sizeField = (uint64_t *)(structBase + sizeof(void *));
+    uint64_t *rField = (uint64_t *)(structBase + sizeof(void *) + sizeof(uint64_t));
+    uint64_t *wField = (uint64_t *)(structBase + sizeof(void *) + sizeof(uint64_t) * 2);
+
+    NSLog(@"[ALLOC] Current state: buff=%p, size=%llu, r=%llu, w=%llu",
+          *buffPtrField, *sizeField, *rField, *wField);
+
+    // If size is 0, we need to allocate
+    if (*sizeField == 0) {
+        // Allocate a reasonable buffer (128KB = 128 * 1024)
+        size_t bufferSize = 131072;  // 128KB, typical audio buffer size
+
+        // Free previous allocation if any
+        if (g_allocatedVoiceBuffer) {
+            free(g_allocatedVoiceBuffer);
+        }
+
+        g_allocatedVoiceBuffer = (uint8_t *)calloc(bufferSize, 1);
+        g_allocatedVoiceBufferSize = bufferSize;
+
+        if (g_allocatedVoiceBuffer == NULL) {
+            NSLog(@"[ALLOC] ❌ Failed to allocate %zu bytes", bufferSize);
+            return NO;
+        }
+
+        NSLog(@"[ALLOC] ✅ Allocated %zu bytes at %p", bufferSize, g_allocatedVoiceBuffer);
+
+        // Write to the SDK's buffer structure
+        // WARNING: This is risky! The SDK might not expect this buffer
+        *buffPtrField = g_allocatedVoiceBuffer;
+        *sizeField = bufferSize;
+        *rField = 0;
+        *wField = 0;
+
+        NSLog(@"[ALLOC] ✅ Updated SDK's voice_out_buff:");
+        NSLog(@"[ALLOC]    buff=%p, size=%llu, r=%llu, w=%llu",
+              *buffPtrField, *sizeField, *rField, *wField);
+
+        return YES;
+    } else {
+        NSLog(@"[ALLOC] Buffer already has size=%llu - no allocation needed", *sizeField);
+        return YES;
+    }
+}
+
+/// Start direct P2P channel 2 capture
+- (void)startP2PAudioCapture:(void *)clientPtr {
+    NSLog(@"[AudioHookBridge] ═══════════════════════════════════════");
+    NSLog(@"[AudioHookBridge] 🎙️ Story 10.3: Starting P2P Audio Capture");
+    NSLog(@"[AudioHookBridge] ═══════════════════════════════════════");
+
+    if (g_p2pAudioTimer != NULL) {
+        NSLog(@"[P2P-AUDIO] Already running");
+        return;
+    }
+
+    g_p2pClientPtr = clientPtr;
+
+    // Create timer to poll for audio data
+    dispatch_queue_t queue = dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0);
+    g_p2pAudioTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, queue);
+
+    dispatch_source_set_timer(g_p2pAudioTimer,
+                              dispatch_time(DISPATCH_TIME_NOW, 0),
+                              20 * NSEC_PER_MSEC,   // 20ms interval (50Hz)
+                              1 * NSEC_PER_MSEC);   // 1ms leeway
+
+    __weak AudioHookBridge *weakSelf = self;
+    static int pollCount = 0;
+    pollCount = 0;
+
+    dispatch_source_set_event_handler(g_p2pAudioTimer, ^{
+        pollCount++;
+        [weakSelf pollP2PAudioChannel:pollCount];
+    });
+
+    dispatch_resume(g_p2pAudioTimer);
+    NSLog(@"[P2P-AUDIO] ✅ Capture started (20ms interval)");
+}
+
+/// Poll P2P channel 2 for audio data
+- (void)pollP2PAudioChannel:(int)pollCount {
+    if (capturedPlayerInstance == nil) return;
+
+    Class playerClass = object_getClass(capturedPlayerInstance);
+    void *playerPtr = (__bridge void *)capturedPlayerInstance;
+
+    // Read voice_out_buff state
+    Ivar buffIvar = class_getInstanceVariable(playerClass, "voice_out_buff");
+    if (!buffIvar) return;
+
+    ptrdiff_t offset = ivar_getOffset(buffIvar);
+    uint8_t *structBase = (uint8_t *)playerPtr + offset;
+
+    void **buffPtrField = (void **)structBase;
+    uint64_t *sizeField = (uint64_t *)(structBase + sizeof(void *));
+    uint64_t *rField = (uint64_t *)(structBase + sizeof(void *) + sizeof(uint64_t));
+    uint64_t *wField = (uint64_t *)(structBase + sizeof(void *) + sizeof(uint64_t) * 2);
+
+    uint8_t *buff = (uint8_t *)*buffPtrField;
+    uint64_t size = *sizeField;
+    uint64_t r = *rField;
+    uint64_t w = *wField;
+
+    // Log periodically
+    if (pollCount <= 10 || pollCount % 50 == 0) {
+        NSLog(@"[P2P-AUDIO] Poll #%d: buff=%p, size=%llu, r=%llu, w=%llu",
+              pollCount, buff, size, r, w);
+    }
+
+    // Check for new data
+    if (w <= r || buff == NULL || size == 0) {
+        return;  // No new data
+    }
+
+    // We have data!
+    uint64_t available = w - r;
+
+    NSLog(@"[P2P-AUDIO] 🎉 DATA AVAILABLE! %llu bytes (r=%llu, w=%llu)", available, r, w);
+
+    // Read and decode the data
+    uint64_t toRead = MIN(available, (uint64_t)4096);  // Max 4KB at a time
+    uint64_t readPos = r % size;
+
+    // Handle wrap-around
+    uint8_t tempBuffer[4096];
+    uint64_t bytesToEnd = size - readPos;
+
+    if (toRead <= bytesToEnd) {
+        memcpy(tempBuffer, buff + readPos, toRead);
+    } else {
+        memcpy(tempBuffer, buff + readPos, bytesToEnd);
+        memcpy(tempBuffer + bytesToEnd, buff, toRead - bytesToEnd);
+    }
+
+    // Update read position
+    *rField = r + toRead;
+
+    // Analyze the data
+    int nonZero = 0;
+    for (uint64_t i = 0; i < toRead && i < 100; i++) {
+        if (tempBuffer[i] != 0) nonZero++;
+    }
+
+    NSLog(@"[P2P-AUDIO] Read %llu bytes, non-zero in first 100: %d", toRead, nonZero);
+
+    // Dump first 32 bytes
+    NSMutableString *hexStr = [NSMutableString string];
+    for (int i = 0; i < MIN(32, (int)toRead); i++) {
+        [hexStr appendFormat:@"%02X ", tempBuffer[i]];
+    }
+    NSLog(@"[P2P-AUDIO] Data: %@", hexStr);
+
+    // If it looks like G.711a audio, decode it
+    if (nonZero > 20) {
+        size_t sampleCount = toRead;  // G.711: 1 byte = 1 sample
+        int16_t *pcmBuffer = (int16_t *)malloc(sampleCount * sizeof(int16_t));
+
+        if (pcmBuffer) {
+            // Decode G.711a
+            decode_alaw(tempBuffer, pcmBuffer, sampleCount);
+
+            // Calculate stats
+            int16_t minVal = pcmBuffer[0], maxVal = pcmBuffer[0];
+            float sumAbs = 0;
+            for (size_t i = 0; i < sampleCount && i < 480; i++) {
+                if (pcmBuffer[i] < minVal) minVal = pcmBuffer[i];
+                if (pcmBuffer[i] > maxVal) maxVal = pcmBuffer[i];
+                sumAbs += fabsf((float)pcmBuffer[i]);
+            }
+            float avgAbs = sumAbs / (sampleCount > 0 ? sampleCount : 1);
+
+            NSLog(@"[P2P-AUDIO] Decoded PCM: min=%d, max=%d, avgAbs=%.1f", minVal, maxVal, avgAbs);
+
+            if (avgAbs > 100) {
+                NSLog(@"[P2P-AUDIO] ✅ REAL AUDIO DETECTED! Forwarding to callback...");
+
+                // Forward to Swift callback
+                if (self.captureCallback) {
+                    self.captureCallback(pcmBuffer, (uint32_t)sampleCount);
+                    _capturedFrameCount += sampleCount;
+                }
+            }
+
+            free(pcmBuffer);
+        }
+    }
+}
+
+/// Stop P2P audio capture
+- (void)stopP2PAudioCapture {
+    if (g_p2pAudioTimer != NULL) {
+        dispatch_source_cancel(g_p2pAudioTimer);
+        g_p2pAudioTimer = NULL;
+        NSLog(@"[P2P-AUDIO] ✅ Capture stopped");
+    }
+    g_p2pClientPtr = NULL;
+}
+
+/// Run full Story 10.3 test
+- (void)testStory103:(void *)clientPtr {
+    NSLog(@"[AudioHookBridge] ═══════════════════════════════════════");
+    NSLog(@"[AudioHookBridge] 🚀 STORY 10.3: P2P Audio Interception Test");
+    NSLog(@"[AudioHookBridge] ═══════════════════════════════════════");
+
+    // Step 1: Resolve CSession symbols (informational)
+    [self resolveCSessionSymbols];
+
+    // Step 2: Allocate voice buffer (if size=0)
+    BOOL allocated = [self allocateVoiceBuffer];
+    if (!allocated) {
+        NSLog(@"[10.3] ⚠️ Buffer allocation failed or not needed");
+    }
+
+    // Step 3: Send audio CGI commands
+    NSLog(@"[10.3] Sending audio CGI commands...");
+    [self testAudioCgiCommands:clientPtr];
+
+    // Step 4: Start P2P audio capture
+    [self startP2PAudioCapture:clientPtr];
+
+    NSLog(@"[AudioHookBridge] ═══════════════════════════════════════");
+    NSLog(@"[AudioHookBridge] 📋 Story 10.3 test running!");
+    NSLog(@"[AudioHookBridge] Watch for [P2P-AUDIO] 🎉 DATA AVAILABLE! messages");
+    NSLog(@"[AudioHookBridge] The test will run for 30 seconds...");
+    NSLog(@"[AudioHookBridge] ═══════════════════════════════════════");
+
+    // Schedule auto-stop after 30 seconds
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        [self stopP2PAudioCapture];
+        NSLog(@"[10.3] ✅ Test completed (30 second timeout)");
+        NSLog(@"[10.3] Captured frames: %llu", self.capturedFrameCount);
+    });
+}
+
 @end

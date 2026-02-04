@@ -132,6 +132,27 @@ typedef void (^AudioCaptureBlock)(const int16_t *samples, uint32_t count);
 /// Combined test: Send audio CGI commands and monitor buffer for response
 - (void)testAudioCgiWithMonitor:(void *)clientPtr;
 
+#pragma mark - Story 10.3: P2P Channel Audio Interception
+
+/// Resolve CSession symbols for direct P2P channel access
+/// Returns YES if key symbols (CSession_ChannelBuffer_Get, CSession_Data_Read) found
+- (BOOL)resolveCSessionSymbols;
+
+/// Manually allocate the voice_out_buff that was never initialized
+/// This allows the SDK to store audio data even though startVoice() failed
+- (BOOL)allocateVoiceBuffer;
+
+/// Start direct P2P channel 2 capture
+/// This reads from the P2P layer, bypassing SDK's broken audio pipeline
+/// @param clientPtr The P2P client pointer
+- (void)startP2PAudioCapture:(void *)clientPtr;
+
+/// Stop P2P audio capture
+- (void)stopP2PAudioCapture;
+
+/// Run full Story 10.3 test: allocate buffer + CGI + P2P capture
+- (void)testStory103:(void *)clientPtr;
+
 @end
 
 NS_ASSUME_NONNULL_END

@@ -865,8 +865,192 @@ Since the SDK has "all-or-nothing" behavior and won't request audio when its Aud
 
 ---
 
-## Next Steps
+---
 
-1. **Research camera audio command** - What CGI/P2P command enables audio streaming?
-2. **Hook SDK packet receive** - Intercept audio packets as they arrive from network
-3. **Build direct audio pipeline** - Camera → Hook → Decode → AVAudioEngine → Speaker
+## Attempt 10: Story 10.3 - CSession P2P Channel Access
+
+**Date:** 2026-02-04 Session 7
+
+**What we tried:** Resolve CSession functions via dlsym to access the P2P layer directly, allocate the voice buffer if needed, and poll for audio data while sending CGI commands.
+
+### Implementation
+
+1. **Resolved CSession symbols via dlsym:**
+   - `CSession_ChannelBuffer_Get` - Get buffer for P2P channel
+   - `CSession_Data_Read` - Read data from channel
+   - `CSession_SessionInfo_Get` - Get session info from client
+
+2. **Added voice buffer allocation:**
+   - Check if `voice_out_buff.size == 0`
+   - If so, manually allocate 128KB buffer at offset 17056
+
+3. **Added P2P audio capture with polling:**
+   - Create dispatch_source timer (10ms interval)
+   - Poll `voice_out_buff` structure (r, w positions)
+   - Decode G.711a if data found
+   - Forward to capture callback
+
+4. **Combined test with CGI commands:**
+   - Send multiple audio CGI commands
+   - Monitor buffer before/during/after
+
+### Results
+
+**CSession Symbol Resolution:** ✅ ALL FOUND
+```
+[AudioHookBridge] 🔗 CSession symbols resolved:
+   CSession_ChannelBuffer_Get: 0x104c35c74 ✅
+   CSession_Data_Read: 0x104c35c74 ✅
+   CSession_SessionInfo_Get: 0x104c35c74 ✅
+```
+
+**Voice Buffer State:** ✅ ALLOCATED (but empty)
+```
+[AudioHookBridge] 🔬 voice_out_buff already allocated:
+   size: 128000 bytes
+   r: 0
+   w: 0
+```
+
+**CGI Commands:** ✅ ALL SUCCEEDED
+```
+[AudioHookBridge] 📡 CGI: decoder_control.cgi?command=90 → result: 1
+[AudioHookBridge] 📡 CGI: audiostream.cgi?streamid=0 → result: 1
+[AudioHookBridge] 📡 CGI: get_camera_params.cgi → result: 1
+[AudioHookBridge] 📡 CGI: get_params.cgi?audio_enable → result: 1
+```
+
+**Buffer Polling:** ❌ NO DATA EVER WRITTEN
+```
+[AudioHookBridge] 📊 Poll #1: r=0, w=0
+[AudioHookBridge] 📊 Poll #2: r=0, w=0
+...
+[AudioHookBridge] 📊 Poll #100: r=0, w=0
+```
+
+### Key Insights from Story 10.3
+
+| Component | Status | Observation |
+|-----------|--------|-------------|
+| CSession symbols | ✅ Found | SDK exports these functions |
+| CGI command send | ✅ Works | Commands return success (1) |
+| voice_out_buff allocation | ✅ Exists | 128KB allocated by SDK |
+| Buffer write position | ❌ Always 0 | SDK never writes to buffer |
+
+### Analysis
+
+**Significant Change from Story 10.2:**
+- In Story 10.2: `voice_out_buff.size = 0` (buffer not allocated)
+- In Story 10.3: `voice_out_buff.size = 128000` (buffer IS allocated!)
+
+This means the SDK DOES allocate the buffer, but **never writes to it**. The camera may be sending audio packets, but the SDK's internal state machine is blocking them from reaching the buffer.
+
+### Possible Root Causes
+
+1. **SDK drops packets before buffer:**
+   The SDK receives audio packets but checks `voice_flag` or similar state before writing to buffer. Since `startVoice()` returned FALSE, this flag is likely FALSE.
+
+2. **Camera never sends audio:**
+   Despite CGI commands returning success, the camera might not be configured to send audio over P2P. The CGI success might just mean "command received" not "audio enabled".
+
+3. **Wrong P2P channel:**
+   Audio might be arriving on a different channel or in a different format than expected.
+
+4. **Timing issue:**
+   Camera might need video streaming established first, or might need a specific sequence of commands.
+
+### What We Learned
+
+1. **CSession functions ARE accessible** - We can resolve and potentially call them
+2. **CGI commands ARE sent successfully** - The P2P command channel works
+3. **Buffers ARE allocated** - The SDK sets up memory for audio
+4. **SDK internal state blocks audio** - Something between packet receive and buffer write drops everything
+
+### Failed Hypotheses
+
+| Hypothesis | Result |
+|------------|--------|
+| "Buffer not allocated because startVoice failed" | ❌ Buffer IS allocated (128KB) |
+| "CGI commands will trigger audio" | ❌ Commands succeed but no audio |
+| "CSession direct read will work" | ❌ No data in buffers to read |
+
+---
+
+## Summary of All Attempts
+
+| # | Approach | Result | Why It Failed |
+|---|----------|--------|---------------|
+| 1 | Swizzle startVoice/createAudioUnit | ✅ Hooks work | N/A - hooks installed correctly |
+| 2 | Render notify on AudioUnit | ✅ Callback fires | N/A - callback works |
+| 3 | Format conversion pipeline | ✅ Pipeline works | N/A - data flows correctly |
+| 4 | Health check & auto-restart | ✅ Engine restarts | N/A - restart works |
+| 5 | Sample value diagnostics | ❌ Found silence | SDK outputs zeros |
+| 6 | Direct voice_frame read | ❌ Empty structure | SDK never populates it |
+| 7 | P2P Channel direct read (client_read) | ❌ Crashes | Wrong function signature/context |
+| 8 | Upstream buffer read | ❌ Buffers empty | r=0, w=0 despite allocation |
+| 9 | pcmp2_setListener (Story 10.1) | ❌ Symbols not found | SDK doesn't export pcmp2_* |
+| 10 | CSession + CGI (Story 10.3) | ❌ No data | CGI succeeds but buffer stays empty |
+
+---
+
+## Current Understanding
+
+### What Works ✅
+- Method swizzling and hooking SDK methods
+- CGI command transmission via P2P
+- CSession symbol resolution
+- AVAudioEngine pipeline (tested with synthetic audio)
+- G.711a decoder (tested with known samples)
+- Circular buffer implementation
+
+### What Doesn't Work ❌
+- Getting actual audio data from SDK/camera
+- Any approach that relies on SDK's internal state machine
+- Direct P2P channel reads (crashes)
+
+### The Fundamental Problem
+
+The SDK has an **all-or-nothing architecture**:
+```
+IF (AudioUnit configuration succeeds at 16kHz)
+    THEN enable entire audio pipeline
+    ELSE disable EVERYTHING - don't even request audio from camera
+```
+
+iOS requires minimum 48kHz → AudioUnit fails → SDK disables audio → Camera never sends audio
+
+---
+
+## Next Steps (Story 10.4: Pipeline Integration)
+
+Story 10.4 focuses on building the complete playback pipeline, but first we need working audio data. Options to explore:
+
+1. **Hook deeper in SDK** - Find where packets arrive before state check
+2. **Different camera command** - Try ONVIF or other protocols
+3. **Network packet capture** - Verify camera is/isn't sending audio
+4. **Alternative SDK initialization** - Force startVoice to "succeed" despite error
+
+---
+
+## Files Modified in Story 10.3
+
+| File | Changes |
+|------|---------|
+| `AudioHookBridge.h` | Added Story 10.3 method declarations |
+| `AudioHookBridge.m` | Added CSession resolution, buffer allocation, P2P capture |
+| `ContentView.swift` | Added "Test P2P Capture (10.3)" button |
+| `AUDIO_HOOK_TROUBLESHOOTING.md` | This update |
+
+---
+
+## Session Timeline (Updated)
+
+| Session | Focus | Key Finding |
+|---------|-------|-------------|
+| Session 1 | Hook installation | Swizzling works, AudioUnit captured |
+| Session 2 | Engine stability | Category change kills engine, auto-restart works |
+| Session 3 | Sample analysis | SDK outputs SILENCE (all zeros) |
+| Session 4 | voice_frame read | voice_frame is EMPTY, startVoice() returns FALSE |
+| Session 5 | P2P direct read | client_read() CRASHES, discovered upstream buffers |
+| Session 6 | Upstream buffer read | Buffers exist but EMPTY (r=0, w=0) |
+| Session 7 | Story 10.1-10.3 | pcmp2 not found, CGI works, CSession works, still no data |

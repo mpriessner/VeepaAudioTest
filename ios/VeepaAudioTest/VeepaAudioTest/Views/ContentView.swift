@@ -270,6 +270,25 @@ struct ContentView: View {
                 .font(.caption2)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.leading)
+
+            // Story 10.3: P2P Audio Interception
+            Button(action: testStory103) {
+                HStack {
+                    Image(systemName: "waveform.badge.plus")
+                    Text("Test P2P Capture (10.3)")
+                }
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(isConnected ? Color.purple : Color.gray)
+                .foregroundColor(.white)
+                .cornerRadius(8)
+            }
+            .disabled(!isConnected)
+
+            Text("Story 10.3: Allocates buffer + CGI + P2P capture")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.leading)
         }
         .padding()
     }
@@ -787,6 +806,60 @@ struct ContentView: View {
             print("[ContentView] 📋 Test running!")
             print("[ContentView] Watch for [MONITOR] 🎉 BUFFER CHANGE! messages")
             print("[ContentView] This indicates audio data is arriving!")
+            print("[ContentView] ═══════════════════════════════════════")
+        }
+    }
+
+    /// Story 10.3: P2P Audio Interception Test
+    /// This allocates the voice buffer, sends CGI commands, and captures audio from P2P
+    private func testStory103() {
+        Task {
+            print("[ContentView] ═══════════════════════════════════════")
+            print("[ContentView] 🚀 STORY 10.3: P2P Audio Interception Test")
+            print("[ContentView] ═══════════════════════════════════════")
+
+            let bridge = AudioHookBridge.shared
+
+            // Step 1: Check if we have client pointer
+            guard let clientPtr = connectionService.clientPtr else {
+                print("[ContentView] ❌ No client pointer - connect to camera first!")
+                return
+            }
+            print("[ContentView] ✅ Client pointer: \(clientPtr)")
+
+            // Step 2: Install SDK Hook if not already done
+            print("[ContentView] Step 2: Installing SDK Hook...")
+            if !bridge.isHooked {
+                let hooked = bridge.installSwizzling()
+                print("[ContentView] Hook installed: \(hooked)")
+            } else {
+                print("[ContentView] Hook already installed")
+            }
+
+            // Step 3: Start audio briefly to capture player instance
+            print("[ContentView] Step 3: Starting SDK audio to capture player instance...")
+            do {
+                if !audioService.isPlaying {
+                    try await audioService.startAudio()
+                    // Wait for player to be captured
+                    try await Task.sleep(nanoseconds: 500_000_000)
+                }
+            } catch {
+                print("[ContentView] ⚠️ Audio start failed: \(error) - continuing anyway")
+            }
+
+            // Step 4: Run Story 10.3 test
+            print("[ContentView] Step 4: Running Story 10.3 test...")
+            guard let clientRawPtr = UnsafeMutableRawPointer(bitPattern: clientPtr) else {
+                print("[ContentView] ❌ Failed to convert clientPtr to pointer")
+                return
+            }
+            bridge.testStory103(clientRawPtr)
+
+            print("[ContentView] ═══════════════════════════════════════")
+            print("[ContentView] 📋 Story 10.3 test running!")
+            print("[ContentView] Watch for [P2P-AUDIO] 🎉 DATA AVAILABLE! messages")
+            print("[ContentView] The test will run for 30 seconds...")
             print("[ContentView] ═══════════════════════════════════════")
         }
     }

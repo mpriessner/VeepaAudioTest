@@ -5,7 +5,7 @@
 //   - Pre-filled test credentials for convenience
 //
 // TEST CAMERA CREDENTIALS (hard-coded):
-// - UID: OKB0379853SNLJ
+// - UID: OKB0379832YFIY (changed from OKB0401422WRKF - battery died)
 // - Password: 888888
 // - WiFi Password (if needed): 6wKe727e
 //
@@ -20,10 +20,10 @@ struct ContentView: View {
     @StateObject private var audioService = AudioStreamService()
 
     // Pre-filled test credentials for convenience
-    // Camera: OKB0379832YFIY (current test camera)
+    // Camera: OKB0379196OXYB (current test camera - changed 2026-02-04)
     // Password: 888888 (default camera password)
     // Note: Credentials are now fetched automatically from cloud!
-    @State private var uid = "OKB0379832YFIY"
+    @State private var uid = "OKB0379196OXYB"
     @State private var password = "888888"
     @State private var showingError = false
     @State private var errorMessage = ""
@@ -167,6 +167,69 @@ struct ContentView: View {
                 .cornerRadius(8)
             }
             .disabled(!isConnected || !audioService.isPlaying)
+
+            // PROOF OF CONCEPT: Test P2P Audio Channel Read
+            Divider()
+                .padding(.vertical, 4)
+
+            Text("🧪 Proof of Concept")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            // Test AudioBridgeEngine independently (no camera needed)
+            Button(action: testAudioBridgeEngine) {
+                HStack {
+                    Image(systemName: "waveform.circle.fill")
+                    Text("Test Audio Engine (440Hz)")
+                }
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(Color.cyan)
+                .foregroundColor(.white)
+                .cornerRadius(8)
+            }
+
+            Text("Plays a 440Hz test tone to verify AudioBridgeEngine works")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.leading)
+
+            Button(action: testP2PChannelDirect) {
+                HStack {
+                    Image(systemName: "antenna.radiowaves.left.and.right")
+                    Text("Test P2P Channels")
+                }
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(isConnected ? Color.purple : Color.gray)
+                .foregroundColor(.white)
+                .cornerRadius(8)
+            }
+            .disabled(!isConnected || isConnecting)
+
+            Text("CRITICAL TEST: Reads from P2P channels directly. Check Xcode console for results.")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.leading)
+
+            // Test AudioUnit Hook discovery
+            Button(action: testAudioHook) {
+                HStack {
+                    Image(systemName: "link.circle.fill")
+                    Text("Test SDK Hook")
+                }
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(Color.indigo)
+                .foregroundColor(.white)
+                .cornerRadius(8)
+            }
+
+            Text("Discovers SDK's AppIOSPlayer and AudioUnit for hooking")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.leading)
         }
         .padding()
     }
@@ -327,14 +390,117 @@ struct ContentView: View {
         Task {
             do {
                 if audioService.isPlaying {
+                    // Stop voice frame capture first
+                    AudioHookBridge.shared.stopVoiceFrameCapture()
                     try await audioService.stopAudio()
                 } else {
-                    try await audioService.startAudio()
+                    // Check if hook is installed - if so, skip PreInit to avoid disrupting AudioBridgeEngine
+                    if AudioHookBridge.shared.isHooked {
+                        print("[ContentView] 🔗 Hook is active - starting audio WITHOUT PreInit")
+                        print("[ContentView] 💡 This preserves AudioBridgeEngine's audio session")
+
+                        // Just call startVoice directly without reconfiguring audio session
+                        try await audioService.startAudioDirect()
+
+                        // Start G.711a voice frame capture (bypasses broken AudioUnit)
+                        print("[ContentView] 🎙️ Starting G.711a voice frame capture...")
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                            AudioHookBridge.shared.startVoiceFrameCapture()
+                        }
+                    } else {
+                        // Normal flow with PreInit strategy
+                        try await audioService.startAudio()
+                    }
                 }
             } catch {
                 errorMessage = error.localizedDescription
                 showingError = true
             }
+        }
+    }
+
+    private func testP2PAudioChannel() {
+        Task {
+            // Get clientPtr from connection service
+            guard let clientPtr = connectionService.clientPtr else {
+                errorMessage = "No active P2P connection"
+                showingError = true
+                return
+            }
+
+            // First, start audio streaming from camera
+            // This triggers the camera to send audio on channel 2
+            do {
+                if !audioService.isPlaying {
+                    try await audioService.startAudio()
+                }
+            } catch {
+                errorMessage = "Failed to start audio: \(error.localizedDescription)"
+                showingError = true
+                return
+            }
+
+            // Run verification test instead of regular test
+            // This will compare video (ch1) vs audio (ch2) to prove/disprove hypothesis
+            await VSTCBridge.shared.verifyChannelStatus(clientPtr: clientPtr)
+        }
+    }
+
+    /// Test P2P channels directly WITHOUT starting audio
+    /// This helps determine if audio data exists on the P2P connection
+    /// independently of the SDK's broken audio pipeline
+    private func testP2PChannelDirect() {
+        Task {
+            print("[ContentView] ═══════════════════════════════════════════════")
+            print("[ContentView] 🔬 P2P CHANNEL DIRECT TEST")
+            print("[ContentView] ═══════════════════════════════════════════════")
+            print("[ContentView] This tests P2P channels WITHOUT SDK audio start")
+            print("[ContentView] Goal: Determine if audio data exists at P2P layer")
+
+            // Get clientPtr from connection service
+            guard let clientPtr = connectionService.clientPtr else {
+                print("[ContentView] ❌ No active P2P connection")
+                errorMessage = "No active P2P connection"
+                showingError = true
+                return
+            }
+
+            print("[ContentView] ✅ Client pointer: \(clientPtr)")
+            print("[ContentView]")
+            print("[ContentView] Phase 1: Test channels WITHOUT audio start")
+            print("[ContentView] ─────────────────────────────────────────────")
+
+            // Run verification test WITHOUT starting audio first
+            await VSTCBridge.shared.verifyChannelStatus(clientPtr: clientPtr)
+
+            print("[ContentView]")
+            print("[ContentView] Phase 2: Now try with SDK audio start (triggers camera)")
+            print("[ContentView] ─────────────────────────────────────────────")
+
+            // Now start audio (this may trigger camera to send audio)
+            do {
+                if !audioService.isPlaying {
+                    print("[ContentView] Starting audio via SDK (may trigger camera)...")
+                    try await audioService.startAudio()
+
+                    // Wait a moment for camera to start sending
+                    try await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds
+
+                    print("[ContentView] Audio start attempted. Testing channels again...")
+                    await VSTCBridge.shared.verifyChannelStatus(clientPtr: clientPtr)
+                }
+            } catch {
+                print("[ContentView] ⚠️ Audio start failed: \(error)")
+                print("[ContentView] Testing channels anyway...")
+
+                // Wait and test anyway
+                try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
+                await VSTCBridge.shared.verifyChannelStatus(clientPtr: clientPtr)
+            }
+
+            print("[ContentView] ═══════════════════════════════════════════════")
+            print("[ContentView] 📊 TEST COMPLETE - Check logs above for results")
+            print("[ContentView] ═══════════════════════════════════════════════")
         }
     }
 
@@ -346,6 +512,117 @@ struct ContentView: View {
                 errorMessage = error.localizedDescription
                 showingError = true
             }
+        }
+    }
+
+    /// Test AudioBridgeEngine independently with a 440Hz sine wave
+    /// This verifies our audio pipeline works without needing the camera
+    private func testAudioBridgeEngine() {
+        Task {
+            do {
+                print("[ContentView] 🧪 Testing AudioBridgeEngine...")
+
+                let engine = AudioBridgeEngine.shared
+
+                // Start the engine
+                try engine.start()
+
+                // Generate and play a 1-second test tone
+                engine.playTestTone(frequency: 440, duration: 1.0)
+
+                print("[ContentView] 🔊 Test tone should be playing now!")
+                print("[ContentView] 💡 If you hear a 440Hz tone, AudioBridgeEngine works!")
+
+                // Stop after 2 seconds (1s tone + 1s buffer)
+                try await Task.sleep(nanoseconds: 2_000_000_000)
+
+                engine.stop()
+                print("[ContentView] ✅ AudioBridgeEngine test complete")
+
+            } catch {
+                print("[ContentView] ❌ AudioBridgeEngine test failed: \(error)")
+                errorMessage = "Audio engine test failed: \(error.localizedDescription)"
+                showingError = true
+            }
+        }
+    }
+
+    /// Test the AudioHookBridge SDK discovery and hooking
+    /// This runs the Objective-C bridge to find AppIOSPlayer
+    private func testAudioHook() {
+        Task {
+            print("[ContentView] 🔗 Testing AudioHookBridge...")
+
+            let bridge = AudioHookBridge.shared
+
+            // STEP 1: Start AudioBridgeEngine FIRST so it's ready to receive audio
+            print("[ContentView] Step 1: Starting AudioBridgeEngine...")
+            do {
+                try AudioBridgeEngine.shared.start()
+                print("[ContentView] ✅ AudioBridgeEngine started!")
+            } catch {
+                print("[ContentView] ❌ Failed to start AudioBridgeEngine: \(error)")
+            }
+
+            // STEP 2: Set up capture callback BEFORE installing swizzle
+            // This ensures the callback is ready when audio starts flowing
+            print("[ContentView] Step 2: Setting up capture callback...")
+
+            // Log buffer identity for debugging
+            let expectedBufferID = ObjectIdentifier(AudioBridgeEngine.shared.circularBuffer)
+            print("[ContentView] 📍 Expected buffer ID: \(expectedBufferID)")
+
+            bridge.captureCallback = { samples, count in
+                // Forward captured audio to our bridge engine (runs on audio thread)
+                let engine = AudioBridgeEngine.shared
+                let buffer = engine.circularBuffer
+                let beforeCount = buffer.availableSamples
+                engine.pushSamples(samples, count: Int(count))
+                let afterCount = buffer.availableSamples
+
+                // Debug: Log occasionally to verify data flow
+                struct DebugState {
+                    static var logCount = 0
+                    static var bufferIDLogged = false
+                }
+
+                // Log buffer ID once to verify same instance
+                if !DebugState.bufferIDLogged {
+                    DebugState.bufferIDLogged = true
+                    let bufferID = ObjectIdentifier(buffer)
+                    print("[Callback] 📍 Capture buffer ID: \(bufferID)")
+                }
+
+                if DebugState.logCount < 10 {
+                    DebugState.logCount += 1
+                    print("[Callback] ✅ Pushed \(count) samples, buffer: \(beforeCount) → \(afterCount)")
+                } else if DebugState.logCount == 10 {
+                    DebugState.logCount += 1
+                    print("[Callback] 🔇 Silencing further callback logs...")
+                }
+            }
+            print("[ContentView] ✅ Capture callback set")
+
+            // STEP 3: Discover SDK classes (informational)
+            print("[ContentView] Step 3: Discovering SDK classes...")
+            let discoveries = bridge.discoverSDKClasses()
+            for discovery in discoveries {
+                print("[ContentView]   \(discovery)")
+            }
+
+            // STEP 4: Run self-test (informational)
+            print("[ContentView] Step 4: Running self-test...")
+            let testResult = bridge.runSelfTest()
+            print("[ContentView] Self-test: \(testResult ? "PASSED" : "FAILED")")
+
+            // STEP 5: Install swizzling LAST (after callback is ready)
+            print("[ContentView] Step 5: Attempting swizzling...")
+            let swizzleResult = bridge.installSwizzling()
+            print("[ContentView] Swizzling: \(swizzleResult ? "SUCCESS" : "FAILED")")
+
+            print("[ContentView] ✅ AudioHookBridge setup complete")
+            print("[ContentView] 💡 Now press 'Start Audio' to trigger startVoice and begin capture")
+            print("[ContentView] Stats: \(bridge.statisticsDescription())")
         }
     }
 }

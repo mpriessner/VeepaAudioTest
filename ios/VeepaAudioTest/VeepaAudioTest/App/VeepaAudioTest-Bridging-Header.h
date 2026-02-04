@@ -11,4 +11,7 @@
 #import "AppP2PApiPlugin.h"
 #import "AppPlayerPlugin.h"
 
+// Import Audio Hook Bridge for SDK interception
+#import "AudioHookBridge.h"
+
 #endif /* VeepaAudioTest_Bridging_Header_h */

@@ -14,7 +14,7 @@ final class AudioStreamService: ObservableObject {
     @Published var isPlaying = false
     @Published var isMuted = false
     @Published var debugLogs: [String] = []
-    @Published var currentStrategy: AudioSessionStrategy = BaselineStrategy() {
+    @Published var currentStrategy: AudioSessionStrategy = PreInitializeStrategy() {
         didSet {
             log("🔄 Switched to strategy: \(currentStrategy.name)")
             log("   Description: \(currentStrategy.description)")
@@ -55,6 +55,27 @@ final class AudioStreamService: ObservableObject {
 
             isPlaying = true
             log("   ✅ Audio started successfully")
+
+        } catch {
+            log("   ❌ startAudio failed: \(error.localizedDescription)")
+            throw error
+        }
+    }
+
+    /// Start audio WITHOUT reconfiguring audio session
+    /// Used when AudioHookBridge is active to avoid disrupting AudioBridgeEngine
+    func startAudioDirect() async throws {
+        log("🎵 Starting audio DIRECTLY (no audio session changes)...")
+        log("   💡 AudioBridgeEngine's audio session will be preserved")
+
+        // Skip audio session configuration - just call startVoice
+        do {
+            log("   Calling startVoice()...")
+            let result = try await flutterEngine.invoke("startAudio")
+            log("   startVoice result: \(result ?? "nil")")
+
+            isPlaying = true
+            log("   ✅ Audio started successfully (hooked mode)")
 
         } catch {
             log("   ❌ startAudio failed: \(error.localizedDescription)")

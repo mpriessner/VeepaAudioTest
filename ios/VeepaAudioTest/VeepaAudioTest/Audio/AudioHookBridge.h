@@ -92,6 +92,46 @@ typedef void (^AudioCaptureBlock)(const int16_t *samples, uint32_t count);
 /// Stop voice frame capture
 - (void)stopVoiceFrameCapture;
 
+#pragma mark - pcmp2 API (Story 10.1)
+
+/// Resolve pcmp2_* symbols from the SDK using dlsym
+/// Returns YES if critical symbols (pcmp2_init, pcmp2_setListener) were found
+- (BOOL)resolvePcmp2Symbols;
+
+/// Test the pcmp2 listener by initializing and registering a callback
+/// This will log when/if the callback receives audio data
+- (void)testPcmp2Listener;
+
+/// Stop pcmp2 listener test and cleanup
+- (void)stopPcmp2Listener;
+
+/// Investigate if AppIOSPlayer has pcmp2-related ivars and methods
+/// Useful for understanding how the SDK uses pcmp2 internally
+- (void)investigatePcmp2InPlayer;
+
+#pragma mark - CGI Command API (Story 10.2)
+
+/// Resolve client_write_cgi symbol from SDK
+- (BOOL)resolveCgiSymbols;
+
+/// Send a CGI command to the camera
+/// @param cgiCommand The CGI command string
+/// @param clientPtr The P2P client pointer from connection service
+/// @return Result code (positive = success, negative = error)
+- (int)sendCgiCommand:(NSString *)cgiCommand toClient:(void *)clientPtr;
+
+/// Test various audio CGI commands to find one that enables audio
+- (void)testAudioCgiCommands:(void *)clientPtr;
+
+/// Start monitoring voice_out_buff for incoming audio data
+- (void)startBufferMonitor;
+
+/// Stop buffer monitoring
+- (void)stopBufferMonitor;
+
+/// Combined test: Send audio CGI commands and monitor buffer for response
+- (void)testAudioCgiWithMonitor:(void *)clientPtr;
+
 @end
 
 NS_ASSUME_NONNULL_END

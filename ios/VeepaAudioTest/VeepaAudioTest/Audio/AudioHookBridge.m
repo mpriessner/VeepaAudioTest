@@ -9,9 +9,91 @@
 #import "AudioHookBridge.h"
 #import <objc/runtime.h>
 #import <AVFoundation/AVFoundation.h>
+#import <dlfcn.h>
 
 // Forward declare the SDK's class
 @class AppIOSPlayer;
+
+#pragma mark - pcmp2 Function Types (Story 10.1)
+
+/// Function pointer types for pcmp2_* SDK functions
+/// These signatures are guesses based on common callback patterns - we'll experiment
+
+// Possible listener callback signatures
+typedef void (*pcmp2_listener_fn_a)(void *context, const void *data, size_t size);
+typedef void (*pcmp2_listener_fn_b)(void *context, const int16_t *samples, uint32_t frameCount, uint32_t sampleRate);
+typedef void (*pcmp2_listener_fn_c)(const void *data, size_t size);
+
+// pcmp2 function pointer types
+typedef void* (*pcmp2_init_fn)(void);
+typedef void (*pcmp2_finalize_fn)(void *player);
+typedef void (*pcmp2_setListener_fn)(void *player, void *listener);
+typedef void (*pcmp2_setAudioPlayer_fn)(void *player, void *audioPlayer);
+typedef void (*pcmp2_start_fn)(void *player);
+typedef void (*pcmp2_stop_fn)(void *player);
+
+// Resolved function pointers (NULL until resolved)
+static pcmp2_init_fn g_pcmp2_init = NULL;
+static pcmp2_finalize_fn g_pcmp2_finalize = NULL;
+static pcmp2_setListener_fn g_pcmp2_setListener = NULL;
+static pcmp2_setAudioPlayer_fn g_pcmp2_setAudioPlayer = NULL;
+static pcmp2_start_fn g_pcmp2_start = NULL;
+static pcmp2_stop_fn g_pcmp2_stop = NULL;
+
+// pcmp2 instance created by our init
+static void *g_pcmp2_instance = NULL;
+
+#pragma mark - CGI Command Types (Story 10.2)
+
+/// client_write_cgi function type
+/// Signature: int client_write_cgi(void *client, const char *cgi)
+/// Returns: bytes written or negative on error
+typedef int (*client_write_cgi_fn)(void *client, const char *cgi);
+
+// Resolved function pointer
+static client_write_cgi_fn g_client_write_cgi = NULL;
+
+/// Buffer monitoring state
+static dispatch_source_t g_bufferMonitorTimer = NULL;
+static uint64_t g_lastBufferWritePos = 0;
+
+/// Test listener callback - logs when called
+static void testPcmp2ListenerCallback(void *context, const void *data, size_t size) {
+    NSLog(@"[PCMP2-LISTENER] 🎉 CALLBACK INVOKED! context=%p, data=%p, size=%zu", context, data, size);
+
+    if (data && size > 0) {
+        // Check for non-zero data
+        const uint8_t *bytes = (const uint8_t *)data;
+        int nonZeroCount = 0;
+        for (size_t i = 0; i < MIN(size, 100); i++) {
+            if (bytes[i] != 0) nonZeroCount++;
+        }
+        NSLog(@"[PCMP2-LISTENER] Non-zero bytes in first %zu: %d", MIN(size, (size_t)100), nonZeroCount);
+
+        // Dump first 32 bytes
+        NSMutableString *hexStr = [NSMutableString string];
+        for (size_t i = 0; i < MIN(size, (size_t)32); i++) {
+            [hexStr appendFormat:@"%02X ", bytes[i]];
+        }
+        NSLog(@"[PCMP2-LISTENER] First bytes: %@", hexStr);
+
+        // Forward to AudioHookBridge if this looks like audio
+        if (nonZeroCount > 10) {
+            AudioHookBridge *bridge = (__bridge AudioHookBridge *)context;
+            if (bridge.captureCallback) {
+                // Assume data is PCM16 for now (might need adjustment)
+                size_t sampleCount = size / sizeof(int16_t);
+                bridge.captureCallback((const int16_t *)data, (uint32_t)sampleCount);
+                NSLog(@"[PCMP2-LISTENER] Forwarded %zu samples to Swift", sampleCount);
+            }
+        }
+    }
+}
+
+/// Alternative callback signature (no context)
+static void testPcmp2ListenerCallbackNoContext(const void *data, size_t size) {
+    NSLog(@"[PCMP2-LISTENER-NC] 🎉 CALLBACK (no context)! data=%p, size=%zu", data, size);
+}
 
 #pragma mark - G.711 A-law Decoder
 
@@ -1100,6 +1182,456 @@ static void swizzled_startVoice(id self, SEL _cmd) {
     }
 
     lastProcessedFrameNo = 0;
+}
+
+#pragma mark - pcmp2 API (Story 10.1)
+
+/// Resolve pcmp2_* symbols from the SDK using dlsym
+- (BOOL)resolvePcmp2Symbols {
+    NSLog(@"[AudioHookBridge] ═══════════════════════════════════════");
+    NSLog(@"[AudioHookBridge] 🔍 Story 10.1: Resolving pcmp2 Symbols");
+    NSLog(@"[AudioHookBridge] ═══════════════════════════════════════");
+
+    // Use RTLD_DEFAULT to search all loaded libraries
+    g_pcmp2_init = (pcmp2_init_fn)dlsym(RTLD_DEFAULT, "pcmp2_init");
+    g_pcmp2_finalize = (pcmp2_finalize_fn)dlsym(RTLD_DEFAULT, "pcmp2_finalize");
+    g_pcmp2_setListener = (pcmp2_setListener_fn)dlsym(RTLD_DEFAULT, "pcmp2_setListener");
+    g_pcmp2_setAudioPlayer = (pcmp2_setAudioPlayer_fn)dlsym(RTLD_DEFAULT, "pcmp2_setAudioPlayer");
+    g_pcmp2_start = (pcmp2_start_fn)dlsym(RTLD_DEFAULT, "pcmp2_start");
+    g_pcmp2_stop = (pcmp2_stop_fn)dlsym(RTLD_DEFAULT, "pcmp2_stop");
+
+    NSLog(@"[PCMP2] pcmp2_init:          %p %s", g_pcmp2_init, g_pcmp2_init ? "✅" : "❌");
+    NSLog(@"[PCMP2] pcmp2_finalize:      %p %s", g_pcmp2_finalize, g_pcmp2_finalize ? "✅" : "❌");
+    NSLog(@"[PCMP2] pcmp2_setListener:   %p %s", g_pcmp2_setListener, g_pcmp2_setListener ? "✅" : "❌");
+    NSLog(@"[PCMP2] pcmp2_setAudioPlayer:%p %s", g_pcmp2_setAudioPlayer, g_pcmp2_setAudioPlayer ? "✅" : "❌");
+    NSLog(@"[PCMP2] pcmp2_start:         %p %s", g_pcmp2_start, g_pcmp2_start ? "✅" : "❌");
+    NSLog(@"[PCMP2] pcmp2_stop:          %p %s", g_pcmp2_stop, g_pcmp2_stop ? "✅" : "❌");
+
+    // Also try some alternative symbol names
+    if (!g_pcmp2_init) {
+        NSLog(@"[PCMP2] Trying alternative symbol names...");
+
+        void *alt1 = dlsym(RTLD_DEFAULT, "_pcmp2_init");
+        void *alt2 = dlsym(RTLD_DEFAULT, "Pcmp2_init");
+        void *alt3 = dlsym(RTLD_DEFAULT, "pcmp_init");
+        void *alt4 = dlsym(RTLD_DEFAULT, "pcm_player_init");
+
+        NSLog(@"[PCMP2]   _pcmp2_init:       %p", alt1);
+        NSLog(@"[PCMP2]   Pcmp2_init:        %p", alt2);
+        NSLog(@"[PCMP2]   pcmp_init:         %p", alt3);
+        NSLog(@"[PCMP2]   pcm_player_init:   %p", alt4);
+    }
+
+    BOOL success = (g_pcmp2_init != NULL && g_pcmp2_setListener != NULL);
+
+    NSLog(@"[AudioHookBridge] ═══════════════════════════════════════");
+    NSLog(@"[PCMP2] Resolution result: %s", success ? "SUCCESS ✅" : "FAILED ❌");
+    NSLog(@"[AudioHookBridge] ═══════════════════════════════════════");
+
+    return success;
+}
+
+/// Test the pcmp2 listener by initializing and registering a callback
+- (void)testPcmp2Listener {
+    NSLog(@"[AudioHookBridge] ═══════════════════════════════════════");
+    NSLog(@"[AudioHookBridge] 🧪 Story 10.1: Testing pcmp2 Listener");
+    NSLog(@"[AudioHookBridge] ═══════════════════════════════════════");
+
+    // First resolve symbols if not done
+    if (g_pcmp2_init == NULL) {
+        if (![self resolvePcmp2Symbols]) {
+            NSLog(@"[PCMP2] ❌ Cannot test - symbols not resolved");
+            return;
+        }
+    }
+
+    // Try to initialize pcmp2
+    if (g_pcmp2_init) {
+        NSLog(@"[PCMP2] Calling pcmp2_init()...");
+        g_pcmp2_instance = g_pcmp2_init();
+        NSLog(@"[PCMP2] pcmp2_init returned: %p", g_pcmp2_instance);
+
+        if (g_pcmp2_instance == NULL) {
+            NSLog(@"[PCMP2] ⚠️ pcmp2_init returned NULL - trying to continue anyway");
+        }
+    }
+
+    // Try to set listener with our callback
+    if (g_pcmp2_setListener) {
+        NSLog(@"[PCMP2] Calling pcmp2_setListener with our callback...");
+
+        // Try signature A: (player, callback) where callback is (context, data, size)
+        // We pass our bridge as the 'listener' which might be called with (context, data, size)
+        g_pcmp2_setListener(g_pcmp2_instance, (void *)testPcmp2ListenerCallback);
+        NSLog(@"[PCMP2] Listener set (signature A - function pointer)");
+
+        // Note: If the SDK expects an object/delegate pattern, this won't work
+        // We'd need to create an Objective-C object that conforms to some protocol
+    }
+
+    // Try to set audio player (might be required)
+    if (g_pcmp2_setAudioPlayer && capturedPlayerInstance) {
+        NSLog(@"[PCMP2] Calling pcmp2_setAudioPlayer with captured player instance...");
+        g_pcmp2_setAudioPlayer(g_pcmp2_instance, (__bridge void *)capturedPlayerInstance);
+        NSLog(@"[PCMP2] Audio player set");
+    }
+
+    // Try to start
+    if (g_pcmp2_start) {
+        NSLog(@"[PCMP2] Calling pcmp2_start()...");
+        g_pcmp2_start(g_pcmp2_instance);
+        NSLog(@"[PCMP2] pcmp2_start called");
+    }
+
+    NSLog(@"[AudioHookBridge] ═══════════════════════════════════════");
+    NSLog(@"[PCMP2] Test setup complete - waiting for callbacks...");
+    NSLog(@"[PCMP2] If successful, you'll see [PCMP2-LISTENER] messages");
+    NSLog(@"[AudioHookBridge] ═══════════════════════════════════════");
+}
+
+/// Stop pcmp2 listener test
+- (void)stopPcmp2Listener {
+    NSLog(@"[PCMP2] Stopping pcmp2 listener...");
+
+    if (g_pcmp2_stop && g_pcmp2_instance) {
+        g_pcmp2_stop(g_pcmp2_instance);
+        NSLog(@"[PCMP2] pcmp2_stop called");
+    }
+
+    if (g_pcmp2_finalize && g_pcmp2_instance) {
+        g_pcmp2_finalize(g_pcmp2_instance);
+        NSLog(@"[PCMP2] pcmp2_finalize called");
+    }
+
+    g_pcmp2_instance = NULL;
+    NSLog(@"[PCMP2] ✅ Listener stopped");
+}
+
+/// Investigate if AppIOSPlayer has pcmp2-related ivars
+- (void)investigatePcmp2InPlayer {
+    NSLog(@"[AudioHookBridge] ═══════════════════════════════════════");
+    NSLog(@"[AudioHookBridge] 🔍 Investigating pcmp2 in AppIOSPlayer");
+    NSLog(@"[AudioHookBridge] ═══════════════════════════════════════");
+
+    Class playerClass = NSClassFromString(@"AppIOSPlayer");
+    if (!playerClass) {
+        NSLog(@"[PCMP2] ❌ AppIOSPlayer class not found");
+        return;
+    }
+
+    unsigned int ivarCount;
+    Ivar *ivars = class_copyIvarList(playerClass, &ivarCount);
+
+    NSLog(@"[PCMP2] Searching %u ivars for pcmp2/pcm/player/listener patterns...", ivarCount);
+
+    for (unsigned int i = 0; i < ivarCount; i++) {
+        const char *name = ivar_getName(ivars[i]);
+        const char *type = ivar_getTypeEncoding(ivars[i]);
+
+        // Look for pcm/player/listener related ivars
+        if (strstr(name, "pcm") != NULL ||
+            strstr(name, "pcmp") != NULL ||
+            strstr(name, "PCM") != NULL ||
+            strstr(name, "player") != NULL ||
+            strstr(name, "Player") != NULL ||
+            strstr(name, "listener") != NULL ||
+            strstr(name, "Listener") != NULL ||
+            strstr(name, "callback") != NULL ||
+            strstr(name, "delegate") != NULL) {
+
+            NSLog(@"[PCMP2] 📌 Found: %s : %s", name, type);
+
+            // If we have a captured instance, try to read the value
+            if (capturedPlayerInstance) {
+                ptrdiff_t offset = ivar_getOffset(ivars[i]);
+                void *playerPtr = (__bridge void *)capturedPlayerInstance;
+                void *ivarPtr = (uint8_t *)playerPtr + offset;
+
+                if (type && type[0] == '^') {
+                    // It's a pointer
+                    void **ptrValue = (void **)ivarPtr;
+                    NSLog(@"[PCMP2]       Value: %p", *ptrValue);
+                } else if (type && type[0] == '@') {
+                    // It's an object
+                    id objValue = (__bridge id)(*(void **)ivarPtr);
+                    NSLog(@"[PCMP2]       Object: %@", objValue);
+                }
+            }
+        }
+    }
+
+    free(ivars);
+
+    // Also check methods
+    NSLog(@"[PCMP2] Searching methods for pcmp2/listener patterns...");
+
+    unsigned int methodCount;
+    Method *methods = class_copyMethodList(playerClass, &methodCount);
+
+    for (unsigned int i = 0; i < methodCount; i++) {
+        SEL selector = method_getName(methods[i]);
+        const char *name = sel_getName(selector);
+
+        if (strstr(name, "pcm") != NULL ||
+            strstr(name, "PCM") != NULL ||
+            strstr(name, "listener") != NULL ||
+            strstr(name, "Listener") != NULL ||
+            strstr(name, "callback") != NULL ||
+            strstr(name, "delegate") != NULL) {
+
+            NSLog(@"[PCMP2] 📌 Method: %s", name);
+        }
+    }
+
+    free(methods);
+
+    NSLog(@"[AudioHookBridge] ═══════════════════════════════════════");
+}
+
+#pragma mark - CGI Command API (Story 10.2)
+
+/// Resolve client_write_cgi symbol from SDK
+- (BOOL)resolveCgiSymbols {
+    NSLog(@"[AudioHookBridge] ═══════════════════════════════════════");
+    NSLog(@"[AudioHookBridge] 🔍 Story 10.2: Resolving CGI Symbols");
+    NSLog(@"[AudioHookBridge] ═══════════════════════════════════════");
+
+    g_client_write_cgi = (client_write_cgi_fn)dlsym(RTLD_DEFAULT, "client_write_cgi");
+
+    NSLog(@"[CGI] client_write_cgi: %p %s", g_client_write_cgi, g_client_write_cgi ? "✅" : "❌");
+
+    if (!g_client_write_cgi) {
+        // Try with underscore prefix
+        g_client_write_cgi = (client_write_cgi_fn)dlsym(RTLD_DEFAULT, "_client_write_cgi");
+        NSLog(@"[CGI] _client_write_cgi: %p %s", g_client_write_cgi, g_client_write_cgi ? "✅" : "❌");
+    }
+
+    BOOL success = (g_client_write_cgi != NULL);
+    NSLog(@"[CGI] Resolution result: %s", success ? "SUCCESS ✅" : "FAILED ❌");
+    NSLog(@"[AudioHookBridge] ═══════════════════════════════════════");
+
+    return success;
+}
+
+/// Send a CGI command to the camera
+/// @param cgiCommand The CGI command string (e.g., "decoder_control.cgi?command=90&")
+/// @param clientPtr The P2P client pointer from connection service
+/// @return Result code (positive = bytes written, negative = error)
+- (int)sendCgiCommand:(NSString *)cgiCommand toClient:(void *)clientPtr {
+    NSLog(@"[CGI] ─────────────────────────────────────────────");
+    NSLog(@"[CGI] Sending: %@", cgiCommand);
+    NSLog(@"[CGI] Client: %p", clientPtr);
+
+    if (!g_client_write_cgi) {
+        if (![self resolveCgiSymbols]) {
+            NSLog(@"[CGI] ❌ client_write_cgi not resolved");
+            return -1;
+        }
+    }
+
+    if (!clientPtr) {
+        NSLog(@"[CGI] ❌ clientPtr is NULL - not connected?");
+        return -2;
+    }
+
+    const char *cgiStr = [cgiCommand UTF8String];
+    int result = g_client_write_cgi(clientPtr, cgiStr);
+
+    NSLog(@"[CGI] Result: %d %s", result, result >= 0 ? "✅" : "❌");
+    NSLog(@"[CGI] ─────────────────────────────────────────────");
+
+    return result;
+}
+
+/// Test various audio CGI commands to find the one that enables audio
+/// @param clientPtr The P2P client pointer
+- (void)testAudioCgiCommands:(void *)clientPtr {
+    NSLog(@"[AudioHookBridge] ═══════════════════════════════════════");
+    NSLog(@"[AudioHookBridge] 🧪 Story 10.2: Testing Audio CGI Commands");
+    NSLog(@"[AudioHookBridge] ═══════════════════════════════════════");
+
+    if (!clientPtr) {
+        NSLog(@"[CGI] ❌ No client pointer - connect to camera first!");
+        return;
+    }
+
+    // Common Vstarcam audio CGI commands to try
+    NSArray *commands = @[
+        @"get_status.cgi",                    // Basic status check
+        @"decoder_control.cgi?command=90&",   // Audio ON (some models)
+        @"decoder_control.cgi?command=91&",   // Audio OFF (some models)
+        @"audiostream.cgi?streamid=0&",       // Enable audio stream 0
+        @"set_audio.cgi?enable=1",            // Enable audio
+        @"audio.cgi?action=start",            // Start audio
+        @"get_audio_status.cgi",              // Query audio status
+        @"decoder_control.cgi?command=25&onestep=1&",  // PTZ command (might trigger audio)
+    ];
+
+    for (NSString *cmd in commands) {
+        NSLog(@"[CGI-TEST] ══════════════════════════════════════════");
+        NSLog(@"[CGI-TEST] Trying: %@", cmd);
+
+        int result = [self sendCgiCommand:cmd toClient:clientPtr];
+        NSLog(@"[CGI-TEST] Result: %d", result);
+
+        // Small delay between commands
+        [NSThread sleepForTimeInterval:0.3];
+    }
+
+    NSLog(@"[CGI-TEST] ══════════════════════════════════════════");
+    NSLog(@"[CGI-TEST] All commands sent - check buffer monitor for results");
+    NSLog(@"[AudioHookBridge] ═══════════════════════════════════════");
+}
+
+/// Start monitoring voice_out_buff for incoming audio data
+/// This detects when the camera starts sending audio after a CGI command
+- (void)startBufferMonitor {
+    if (g_bufferMonitorTimer != NULL) {
+        NSLog(@"[MONITOR] Buffer monitor already running");
+        return;
+    }
+
+    if (capturedPlayerInstance == nil) {
+        NSLog(@"[MONITOR] ❌ No player instance - call 'Test SDK Hook' first to capture it");
+        return;
+    }
+
+    NSLog(@"[AudioHookBridge] ═══════════════════════════════════════");
+    NSLog(@"[AudioHookBridge] 📊 Starting Buffer Monitor");
+    NSLog(@"[AudioHookBridge] ═══════════════════════════════════════");
+
+    // Get voice_out_buff ivar
+    Class playerClass = object_getClass(capturedPlayerInstance);
+    Ivar buffIvar = class_getInstanceVariable(playerClass, "voice_out_buff");
+
+    if (!buffIvar) {
+        NSLog(@"[MONITOR] ❌ voice_out_buff ivar not found");
+        return;
+    }
+
+    NSLog(@"[MONITOR] ✅ Found voice_out_buff ivar");
+
+    // Create timer to poll buffer every 100ms
+    dispatch_queue_t queue = dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0);
+    g_bufferMonitorTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, queue);
+
+    dispatch_source_set_timer(g_bufferMonitorTimer,
+                              dispatch_time(DISPATCH_TIME_NOW, 0),
+                              100 * NSEC_PER_MSEC,  // 100ms interval
+                              10 * NSEC_PER_MSEC);  // 10ms leeway
+
+    __weak AudioHookBridge *weakSelf = self;
+    ptrdiff_t offset = ivar_getOffset(buffIvar);
+
+    dispatch_source_set_event_handler(g_bufferMonitorTimer, ^{
+        [weakSelf pollVoiceOutBuffer:offset];
+    });
+
+    dispatch_resume(g_bufferMonitorTimer);
+    g_lastBufferWritePos = 0;
+
+    NSLog(@"[MONITOR] ✅ Buffer monitor started (100ms interval)");
+    NSLog(@"[MONITOR] Watching for changes to voice_out_buff.w (write position)");
+    NSLog(@"[AudioHookBridge] ═══════════════════════════════════════");
+}
+
+/// Poll voice_out_buff for changes
+- (void)pollVoiceOutBuffer:(ptrdiff_t)offset {
+    if (capturedPlayerInstance == nil) return;
+
+    void *playerPtr = (__bridge void *)capturedPlayerInstance;
+    void **buffPtrAddr = (void **)(playerPtr + offset);
+    void *buffPtr = *buffPtrAddr;
+
+    if (!buffPtr) {
+        static BOOL loggedNull = NO;
+        if (!loggedNull) {
+            loggedNull = YES;
+            NSLog(@"[MONITOR] ⚠️ voice_out_buff pointer is NULL");
+        }
+        return;
+    }
+
+    // Buffer structure: {*buff, size, r, w}
+    // Offsets: buff=0, size=8, r=16, w=24
+    uint64_t *sizePtr = (uint64_t *)(buffPtr + sizeof(void *));
+    uint64_t *rPtr = (uint64_t *)(buffPtr + sizeof(void *) + sizeof(uint64_t));
+    uint64_t *wPtr = (uint64_t *)(buffPtr + sizeof(void *) + 2 * sizeof(uint64_t));
+
+    uint64_t size = *sizePtr;
+    uint64_t r = *rPtr;
+    uint64_t w = *wPtr;
+
+    static int pollCount = 0;
+    pollCount++;
+
+    // Log initial state once
+    static BOOL initialLogged = NO;
+    if (!initialLogged) {
+        initialLogged = YES;
+        NSLog(@"[MONITOR] Buffer: ptr=%p, size=%llu, r=%llu, w=%llu", buffPtr, size, r, w);
+    }
+
+    // Check for changes
+    if (w != g_lastBufferWritePos) {
+        uint64_t bytesWritten = w - g_lastBufferWritePos;
+        NSLog(@"[MONITOR] 🎉 BUFFER CHANGE! w: %llu → %llu (+%llu bytes)", g_lastBufferWritePos, w, bytesWritten);
+        NSLog(@"[MONITOR] Current state: r=%llu, w=%llu, available=%llu bytes", r, w, w - r);
+
+        // Read and analyze the new data
+        if (bytesWritten > 0 && bytesWritten < size) {
+            void **dataPtr = (void **)buffPtr;
+            uint8_t *data = (uint8_t *)*dataPtr;
+
+            if (data) {
+                uint64_t readPos = g_lastBufferWritePos % size;
+                NSLog(@"[MONITOR] First 16 bytes at offset %llu:", readPos);
+
+                NSMutableString *hexStr = [NSMutableString string];
+                for (int i = 0; i < MIN(16, bytesWritten); i++) {
+                    [hexStr appendFormat:@"%02X ", data[(readPos + i) % size]];
+                }
+                NSLog(@"[MONITOR]   %@", hexStr);
+            }
+        }
+
+        g_lastBufferWritePos = w;
+    }
+
+    // Periodic status log
+    if (pollCount % 100 == 0) {
+        NSLog(@"[MONITOR] Poll #%d: r=%llu, w=%llu, available=%llu", pollCount, r, w, w - r);
+    }
+}
+
+/// Stop buffer monitoring
+- (void)stopBufferMonitor {
+    if (g_bufferMonitorTimer != NULL) {
+        dispatch_source_cancel(g_bufferMonitorTimer);
+        g_bufferMonitorTimer = NULL;
+        NSLog(@"[MONITOR] ✅ Buffer monitor stopped");
+    }
+}
+
+/// Combined test: Send audio CGI and monitor buffer for response
+- (void)testAudioCgiWithMonitor:(void *)clientPtr {
+    NSLog(@"[AudioHookBridge] ═══════════════════════════════════════");
+    NSLog(@"[AudioHookBridge] 🚀 Story 10.2: Full Audio CGI Test");
+    NSLog(@"[AudioHookBridge] ═══════════════════════════════════════");
+
+    // Start buffer monitor first
+    [self startBufferMonitor];
+
+    // Wait a moment for monitor to initialize
+    [NSThread sleepForTimeInterval:0.2];
+
+    // Test audio CGI commands
+    [self testAudioCgiCommands:clientPtr];
+
+    NSLog(@"[AudioHookBridge] ═══════════════════════════════════════");
+    NSLog(@"[AudioHookBridge] Monitor is watching for buffer changes...");
+    NSLog(@"[AudioHookBridge] Look for [MONITOR] 🎉 BUFFER CHANGE! messages");
+    NSLog(@"[AudioHookBridge] ═══════════════════════════════════════");
 }
 
 @end

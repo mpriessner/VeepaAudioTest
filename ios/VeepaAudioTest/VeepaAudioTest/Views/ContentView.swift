@@ -33,24 +33,27 @@ struct ContentView: View {
 
     var body: some View {
         NavigationView {
-            VStack(spacing: 0) {
-                // Connection Section
-                connectionSection
+            ScrollView {
+                VStack(spacing: 0) {
+                    // Connection Section
+                    connectionSection
 
-                Divider()
+                    Divider()
 
-                // Strategy Selection Section
-                strategySelectionSection
+                    // Strategy Selection Section
+                    strategySelectionSection
 
-                Divider()
+                    Divider()
 
-                // Audio Controls Section
-                audioControlsSection
+                    // Audio Controls Section
+                    audioControlsSection
 
-                Divider()
+                    Divider()
 
-                // Debug Log Section
-                debugLogSection
+                    // Debug Log Section (fixed height)
+                    debugLogSection
+                        .frame(height: 200)
+                }
             }
             .navigationTitle("Veepa Audio Test")
             .navigationBarTitleDisplayMode(.inline)
@@ -227,6 +230,43 @@ struct ContentView: View {
             }
 
             Text("Discovers SDK's AppIOSPlayer and AudioUnit for hooking")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.leading)
+
+            // Story 10.1: Test pcmp2 Listener (FAILED - symbols not exported)
+            Button(action: testPcmp2Listener) {
+                HStack {
+                    Image(systemName: "waveform.path.ecg")
+                    Text("Test pcmp2 (Failed)")
+                }
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(Color.gray)
+                .foregroundColor(.white)
+                .cornerRadius(8)
+            }
+
+            Text("Story 10.1: FAILED - SDK doesn't export pcmp2 symbols")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.leading)
+
+            // Story 10.2: Test Audio CGI Commands
+            Button(action: testAudioCgi) {
+                HStack {
+                    Image(systemName: "antenna.radiowaves.left.and.right.circle.fill")
+                    Text("Test Audio CGI")
+                }
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(isConnected ? Color.orange : Color.gray)
+                .foregroundColor(.white)
+                .cornerRadius(8)
+            }
+            .disabled(!isConnected)
+
+            Text("Story 10.2: Sends CGI commands + monitors buffer")
                 .font(.caption2)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.leading)
@@ -623,6 +663,131 @@ struct ContentView: View {
             print("[ContentView] ✅ AudioHookBridge setup complete")
             print("[ContentView] 💡 Now press 'Start Audio' to trigger startVoice and begin capture")
             print("[ContentView] Stats: \(bridge.statisticsDescription())")
+        }
+    }
+
+    /// Story 10.1: Test the pcmp2_setListener API
+    /// This attempts to bypass the SDK's broken AudioUnit by using the pcmp2 listener callback
+    private func testPcmp2Listener() {
+        Task {
+            print("[ContentView] ═══════════════════════════════════════")
+            print("[ContentView] 🧪 STORY 10.1: Testing pcmp2 Listener")
+            print("[ContentView] ═══════════════════════════════════════")
+
+            let bridge = AudioHookBridge.shared
+
+            // Step 1: Resolve pcmp2 symbols
+            print("[ContentView] Step 1: Resolving pcmp2 symbols via dlsym...")
+            let symbolsResolved = bridge.resolvePcmp2Symbols()
+            print("[ContentView] Symbol resolution: \(symbolsResolved ? "SUCCESS ✅" : "FAILED ❌")")
+
+            if !symbolsResolved {
+                print("[ContentView] ❌ Cannot proceed - pcmp2 symbols not found")
+                print("[ContentView] This means the SDK doesn't export these functions")
+                print("[ContentView] Will need to try Story 10.2 (CGI Command) approach instead")
+                return
+            }
+
+            // Step 2: Investigate pcmp2 in AppIOSPlayer
+            print("[ContentView] Step 2: Investigating pcmp2 in AppIOSPlayer...")
+            bridge.investigatePcmp2InPlayer()
+
+            // Step 3: Set up capture callback
+            print("[ContentView] Step 3: Setting up capture callback...")
+            bridge.captureCallback = { samples, count in
+                // Forward to AudioBridgeEngine
+                let engine = AudioBridgeEngine.shared
+                engine.pushSamples(samples, count: Int(count))
+
+                struct PcmpDebug {
+                    static var logCount = 0
+                }
+                if PcmpDebug.logCount < 10 {
+                    PcmpDebug.logCount += 1
+                    print("[PCMP2-CB] Received \(count) samples from pcmp2!")
+                }
+            }
+
+            // Step 4: Start AudioBridgeEngine (if not already started)
+            print("[ContentView] Step 4: Starting AudioBridgeEngine...")
+            do {
+                try AudioBridgeEngine.shared.start()
+                print("[ContentView] ✅ AudioBridgeEngine started")
+            } catch {
+                print("[ContentView] ⚠️ AudioBridgeEngine start failed: \(error)")
+            }
+
+            // Step 5: Test pcmp2 listener
+            print("[ContentView] Step 5: Testing pcmp2 listener...")
+            bridge.testPcmp2Listener()
+
+            print("[ContentView] ═══════════════════════════════════════")
+            print("[ContentView] 📋 Test setup complete!")
+            print("[ContentView] Next: Press 'Start Audio' to trigger SDK audio start")
+            print("[ContentView] Watch for [PCMP2-LISTENER] messages in logs")
+            print("[ContentView] ═══════════════════════════════════════")
+        }
+    }
+
+    /// Story 10.2: Test Audio CGI Commands
+    /// This sends CGI commands to the camera and monitors the buffer for audio data
+    private func testAudioCgi() {
+        Task {
+            print("[ContentView] ═══════════════════════════════════════")
+            print("[ContentView] 🚀 STORY 10.2: Testing Audio CGI Commands")
+            print("[ContentView] ═══════════════════════════════════════")
+
+            let bridge = AudioHookBridge.shared
+
+            // Step 1: Check if we have client pointer
+            guard let clientPtr = connectionService.clientPtr else {
+                print("[ContentView] ❌ No client pointer - connect to camera first!")
+                return
+            }
+            print("[ContentView] ✅ Client pointer: \(clientPtr)")
+
+            // Step 2: Make sure SDK Hook is installed (to capture player instance)
+            if !bridge.isHooked {
+                print("[ContentView] Step 2: Installing SDK Hook to capture player instance...")
+                let _ = bridge.installSwizzling()
+            }
+
+            // Step 3: Resolve CGI symbol
+            print("[ContentView] Step 3: Resolving CGI symbol...")
+            let cgiResolved = bridge.resolveCgiSymbols()
+            print("[ContentView] CGI symbol resolved: \(cgiResolved ? "YES ✅" : "NO ❌")")
+
+            if !cgiResolved {
+                print("[ContentView] ❌ Cannot proceed - CGI symbol not found")
+                return
+            }
+
+            // Step 4: Start audio first to get player instance captured
+            print("[ContentView] Step 4: Starting SDK audio to capture player instance...")
+            do {
+                if !audioService.isPlaying {
+                    try await audioService.startAudio()
+                    // Wait for player to be captured
+                    try await Task.sleep(nanoseconds: 500_000_000)
+                }
+            } catch {
+                print("[ContentView] ⚠️ Audio start failed: \(error) - continuing anyway")
+            }
+
+            // Step 5: Run the combined CGI + Monitor test
+            print("[ContentView] Step 5: Running CGI test with buffer monitor...")
+            // Convert Int to UnsafeMutableRawPointer for Obj-C method
+            guard let clientRawPtr = UnsafeMutableRawPointer(bitPattern: clientPtr) else {
+                print("[ContentView] ❌ Failed to convert clientPtr to pointer")
+                return
+            }
+            bridge.testAudioCgi(withMonitor: clientRawPtr)
+
+            print("[ContentView] ═══════════════════════════════════════")
+            print("[ContentView] 📋 Test running!")
+            print("[ContentView] Watch for [MONITOR] 🎉 BUFFER CHANGE! messages")
+            print("[ContentView] This indicates audio data is arriving!")
+            print("[ContentView] ═══════════════════════════════════════")
         }
     }
 }
